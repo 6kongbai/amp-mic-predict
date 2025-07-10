@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import torch
 from torch import nn
@@ -105,23 +107,16 @@ class CrossAttentionBlock(nn.Module):
 
 
 class MyModel(nn.Module):
-    def __init__(self, esm_model_path, genome_embedding_size, num_last_layers_to_pool=4, hidden_size=256):
+    def __init__(self, embedding_size, genome_embedding_size, lstm_hidden_layers=4, hidden_size=256):
         super().__init__()
         self.hidden_size = hidden_size
-        self.esm_model = AutoModel.from_pretrained(
-            esm_model_path,
-            trust_remote_code=True,
-            output_hidden_states=True
-        )
 
-        esm_config = self.esm_model.config
-        embedding_size = esm_config.hidden_size
+        self.x_before_norm = nn.LayerNorm(embedding_size)
+        self.x_after_norm = nn.LayerNorm(hidden_size * 2)
 
-        self.weighted_pooling = WeightedLayerPooling(
-            num_hidden_layers=esm_config.num_hidden_layers,
-            layer_start=esm_config.num_hidden_layers - num_last_layers_to_pool
-        )
-
+        self.bi_lstm = nn.LSTM(embedding_size, self.hidden_size, lstm_hidden_layers, bidirectional=True,
+                               batch_first=True, dropout=0.2)
+        self.bi_lstm.flatten_parameters()
         self.genome_feature_extractor = nn.Sequential(
             nn.LayerNorm(genome_embedding_size),
             # nn.Linear(genome_embedding_size, genome_embedding_size * 2),
@@ -131,50 +126,49 @@ class MyModel(nn.Module):
             KAN((genome_embedding_size * 2, genome_embedding_size)),
             # nn.Linear(genome_embedding_size * 2, genome_embedding_size)
         )
-        # 如果genome_embedding_size和ESM的embedding_size不同，需要一个线性层对齐
+
         self.genome_proj = nn.Linear(genome_embedding_size,
-                                     embedding_size) if genome_embedding_size != embedding_size else nn.Identity()
+                                     hidden_size * 2) if genome_embedding_size != hidden_size * 2 else nn.Identity()
 
         self.cross_attention_fusion = CrossAttentionBlock(
-            embed_dim=embedding_size,
+            embed_dim=hidden_size * 2,
             num_heads=8
         )
 
         self.mlp = nn.Sequential(
-            nn.Linear(embedding_size * 2, self.hidden_size),
+            nn.Linear(hidden_size * 4, self.hidden_size * 2),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.Linear(self.hidden_size, 1)
         )
 
         self.apply(self._init_weights)
 
-    def forward(self, input_ids, attention_mask, genome):
-        # A. 通过ESM模型，获取所有层的输出
-        esm_outputs = self.esm_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        all_hidden_states = esm_outputs.hidden_states
+    def forward(self, x, genome):
+        # A. 输入嵌入模型的输入
+        x_norm_input = self.x_before_norm(x)
+        x_feature = self.bi_lstm(x_norm_input)[0]  # Shape: (batch_size, seq_len, hidden_size * 2)
+        x_feature_norm = self.x_after_norm(x_feature)
 
-        # B. 使用层权重融合，得到一个增强的ESM序列表示
-        esm_output_fused = self.weighted_pooling(all_hidden_states)
-
-        # C. 处理Genome特征
+        # B. 处理Genome特征
         genome_features = self.genome_feature_extractor(genome)
         genome_features = self.genome_proj(genome_features)
 
-        # D. 执行交叉注意力
+        # C. 执行交叉注意力
         fused_output = self.cross_attention_fusion(
-            query=esm_output_fused,
+            query=x_feature_norm,
             key=genome_features.unsqueeze(dim=1),
             value=genome_features.unsqueeze(dim=1),
         )
 
-        # E. 池化和回归
-        avg_pool = fused_output.mean(dim=1)
-        max_pool = fused_output.max(dim=1).values
+        fused_output += x_feature_norm
+
+        # D. 池化和回归
+        avg_pool = x_feature_norm.mean(dim=1)
+        max_pool = x_feature_norm.max(dim=1).values
+        # Shape: (batch_size, hidden_size * 4)
         pooled_output = torch.cat([avg_pool, max_pool], dim=1)
-        print(pooled_output.shape)
         output = self.mlp(pooled_output)
         return output
 
@@ -188,9 +182,14 @@ class MyModel(nn.Module):
 class MyDataset(torch.utils.data.Dataset):
     def __init__(self, df, tokenizer, max_length=40):
         self.sequences = df['SEQUENCE'].values.tolist()
+        sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in self.sequences]
         self.values = df['NEW-CONCENTRATION'].values.tolist()
-        sample = tokenizer(self.sequences, truncation=True, padding=True, max_length=max_length + 2,
-                           return_tensors='np')
+        sample = tokenizer(sequences,
+                           truncation=True,
+                           padding="longest",  # 使用"longest"来确保所有序列都被填充到相同的长度
+                           max_length=max_length + 2,
+                           return_tensors='np',
+                           add_special_tokens=True)
         self.input_ids = sample['input_ids']
         self.attention_mask = sample['attention_mask']
         self.genome = df.iloc[:, 250:-12].values.tolist()
