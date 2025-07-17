@@ -12,9 +12,12 @@ class FeatureExtractor(nn.Module):
         super().__init__()
         self.norm = nn.LayerNorm(embedding_size)
         self.linear1 = KAN((embedding_size, embedding_size * 2))
+        # self.linear1 = nn.Linear(embedding_size, embedding_size * 2)
         self.act = TeLU()
+        # self.act = nn.GELU()
         self.dropout = nn.Dropout(0.2)
-        self.linear2 = KAN((embedding_size * 2, embedding_size))
+        # self.linear2 = KAN((embedding_size * 2, embedding_size))
+        self.linear2 = nn.Linear(embedding_size * 2, embedding_size)
 
     def forward(self, x):
         x_norm = self.norm(x)
