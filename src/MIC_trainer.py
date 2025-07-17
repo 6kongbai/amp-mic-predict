@@ -155,12 +155,18 @@ def main():
     # --- 2. 数据加载和准备 ---
     EC_train = pd.read_csv('../data/EC_X_train_40.csv')
     EC_test = pd.read_csv('../data/EC_X_test_40.csv')
+    EC_val = pd.read_csv('../data/EC_X_val_40.csv')
     SA_train = pd.read_csv('../data/SA_X_train_40.csv')
     SA_test = pd.read_csv('../data/SA_X_test_40.csv')
+    SA_val = pd.read_csv('../data/SA_X_val_40.csv')
     PA_train = pd.read_csv('../data/PA_X_train_40.csv')
     PA_test = pd.read_csv('../data/PA_X_test_40.csv')
+    PA_val = pd.read_csv('../data/PA_X_val_40.csv')
+    train_df = pd.concat(
+        [EC_train, SA_train, PA_train, EC_val.sample(frac=0.5), SA_val.sample(frac=0.5), PA_val.sample(frac=0.5)],
+        ignore_index=True)
 
-    train_df = pd.concat([EC_train, SA_train, PA_train], ignore_index=True)
+    # train_df = pd.concat([EC_train, SA_train, PA_train], ignore_index=True)
     # train_df = pd.concat([EC_train, SA_train, PA_train], ignore_index=True)
     val_df = pd.concat([EC_test, SA_test, PA_test], ignore_index=True)
     # val_df = pd.concat([EC_test, SA_test, PA_test], ignore_index=True)
