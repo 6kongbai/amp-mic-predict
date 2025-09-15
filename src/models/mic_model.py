@@ -77,8 +77,8 @@ class FeatureExtractor(nn.Module):
     def __init__(self, embedding_size):
         super().__init__()
         self.norm = nn.LayerNorm(embedding_size)
-        self.linear1 = KAN((embedding_size, embedding_size * 2))
-        # self.linear1 = nn.Linear(embedding_size, embedding_size * 2)
+        # self.linear1 = KAN((embedding_size, embedding_size * 2))
+        self.linear1 = nn.Linear(embedding_size, embedding_size * 2)
         self.act = TeLU()
         # self.act = nn.GELU()
         self.dropout = nn.Dropout(0.2)
@@ -122,7 +122,7 @@ class MyModel(nn.Module):
                                bidirectional=True, batch_first=True, dropout=0.2)
 
         self.genome_feature_extractor = FeatureExtractor(genome_embedding_size)
-        self.se_layer = SELayerForSequence(num_features=hidden_size * 2, ratio=32)
+        # self.se_layer = SELayerForSequence(num_features=hidden_size * 2, ratio=32)
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size * 4 + genome_embedding_size, hidden_size * 2),
             nn.GELU(),
@@ -137,8 +137,9 @@ class MyModel(nn.Module):
     def forward(self, x, genome):
         x_norm_input = self.x_before_norm(x)
         x_feature = self.bi_lstm(x_norm_input)[0]
-        x_feature = self.se_layer(x_feature) + x_feature  # 添加残差连接
+        # x_feature = self.se_layer(x_feature) + x_feature  # 添加残差连接
         genome_features = self.genome_feature_extractor(genome)
+
 
         avg_pool = x_feature.mean(dim=1)
         max_pool = x_feature.max(dim=1).values
@@ -168,7 +169,7 @@ class PrecomputedEmbeddingDataset(torch.utils.data.Dataset):
         #                             dtype=torch.float32)
         embedding_model.eval()
         sequences = df['SEQUENCE'].values.tolist()
-        sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
+        # sequences = [" ".join(list(re.sub(r"[UZOB]", "X", sequence))) for sequence in sequences]
 
         all_embeddings = []
         is_main_process = (isinstance(device, int) and device == 0) or (

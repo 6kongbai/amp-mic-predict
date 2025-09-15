@@ -18,7 +18,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from transformers import T5EncoderModel, T5Tokenizer
+from transformers import T5EncoderModel, T5Tokenizer, AutoTokenizer, AutoModel
 
 from models.EMA import EMA
 from models.mic_model import MyModel, PrecomputedEmbeddingDataset
@@ -124,12 +124,20 @@ def get_config():
         'weight_decay': 1e-2,
         'gradient_clip_norm': 1.0,
         'early_stop_patience': 15,
-        'model_path': '../scoures/Port-T5',
+        'model_path': '../scoures/ESM2-650M',
         'genome_embedding_size': 84,
         'hidden_size': 128,
         'lstm_hidden_layers': 2,
         'num_workers': 4
     }
+
+
+def get_embedding_model_and_tokenizer(model_path):
+    # tokenizer = T5Tokenizer.from_pretrained(model_path, trust_remote_code=True)
+    # embedding_model = T5EncoderModel.from_pretrained(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    embedding_model = AutoModel.from_pretrained(model_path)
+    return embedding_model, tokenizer
 
 
 def main():
@@ -141,8 +149,8 @@ def main():
 
     # --- 1. 初始化和路径设置 ---
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    save_dir = f"../save_model/{timestamp}"
-    log_dir = f"../logs/{timestamp}"
+    save_dir = f"../save_model/ESM2-650M"
+    log_dir = f"../logs/ESM2-650M"
 
     writer = None
     if is_main_process:
@@ -162,21 +170,15 @@ def main():
     PA_train = pd.read_csv('../data/PA_X_train_40.csv')
     PA_test = pd.read_csv('../data/PA_X_test_40.csv')
     PA_val = pd.read_csv('../data/PA_X_val_40.csv')
-    train_df = pd.concat(
-        [EC_train, SA_train, PA_train, EC_val.sample(frac=0.5), SA_val.sample(frac=0.5), PA_val.sample(frac=0.5)],
-        ignore_index=True)
-
-    # train_df = pd.concat([EC_train, SA_train, PA_train], ignore_index=True)
-    # train_df = pd.concat([EC_train, SA_train, PA_train], ignore_index=True)
+    train_df = pd.concat([EC_train, SA_train, PA_train, EC_val, SA_val, PA_val], ignore_index=True)
     val_df = pd.concat([EC_test, SA_test, PA_test], ignore_index=True)
-    # val_df = pd.concat([EC_test, SA_test, PA_test], ignore_index=True)
 
     len_ec_val = len(EC_test)
     len_sa_val = len(SA_test)
 
-    tokenizer = T5Tokenizer.from_pretrained(config['model_path'], trust_remote_code=True)
-    embedding_model = T5EncoderModel.from_pretrained(config['model_path']).to(local_rank)
-    t5_embedding_size = embedding_model.config.hidden_size
+    embedding_model, tokenizer = get_embedding_model_and_tokenizer(config['model_path'])
+    embedding_model.to(local_rank)
+    embedding_size = embedding_model.config.hidden_size
 
     train_dataset = PrecomputedEmbeddingDataset(train_df, tokenizer, embedding_model, local_rank, config['max_length'],
                                                 config['batch_size'] * 4)
@@ -194,7 +196,7 @@ def main():
                                              num_workers=config['num_workers'], pin_memory=True)
 
     # --- 3. 模型、优化器、EMA和早停 ---
-    model = MyModel(embedding_size=t5_embedding_size, genome_embedding_size=config['genome_embedding_size'],
+    model = MyModel(embedding_size=embedding_size, genome_embedding_size=config['genome_embedding_size'],
                     lstm_hidden_layers=config["lstm_hidden_layers"], hidden_size=config['hidden_size']).to(local_rank)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
